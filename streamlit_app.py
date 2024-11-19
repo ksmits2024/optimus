@@ -75,8 +75,9 @@ def main():
                 st.stop()
 
             # Load models
-            embedding_model = load_embedding_model()
-            tokenizer, sentiment_model = load_sentiment_model()
+            with st.spinner('Loading models...'):
+                embedding_model = load_embedding_model()
+                tokenizer, sentiment_model = load_sentiment_model()
 
             # Process embeddings
             with st.spinner('Generating sentence embeddings...'):
@@ -86,10 +87,14 @@ def main():
             sentiments = []
             confidences = []
             with st.spinner('Analyzing sentiments...'):
-                for sentence in st.progress(complaints):
+                progress_bar = st.progress(0)  # Initialize progress bar
+                total = len(complaints)
+                for i, sentence in enumerate(complaints, 1):
                     sentiment, confidence = analyze_sentiment(sentence, tokenizer, sentiment_model)
                     sentiments.append(sentiment)
                     confidences.append(confidence)
+                    progress = i / total
+                    progress_bar.progress(progress)  # Update progress bar
 
             # Create results DataFrame
             results_df = pd.DataFrame({
