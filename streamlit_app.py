@@ -26,40 +26,49 @@ def load_embedding_model() -> SentenceTransformer:
     return model
 
 @st.cache_resource(show_spinner=False)
-def load_sentiment_model() -> Tuple[AutoTokenizer, AutoModelForSequenceClassification]:
+def load_sentiment_model() -> Tuple[AutoTokenizer, AutoModelForSequenceClassification, str]:
     """
     Load and cache the sentiment analysis tokenizer and model.
     Utilizes GPU if available for faster processing.
     """
-    device = 0 if torch.cuda.is_available() else -1
     tokenizer = AutoTokenizer.from_pretrained('cardiffnlp/twitter-roberta-base-sentiment-latest')
     model = AutoModelForSequenceClassification.from_pretrained('cardiffnlp/twitter-roberta-base-sentiment-latest')
+    
+    if torch.cuda.is_available():
+        device = 'cuda:0'
+    else:
+        device = 'cpu'
+    
     model.to(device)
-    return tokenizer, model
+    return tokenizer, model, device
 
 @st.cache_resource(show_spinner=False)
-def load_classification_pipeline() -> Pipeline:
+def load_classification_pipeline(device: int) -> Pipeline:
     """
     Load and cache the zero-shot classification pipeline.
-    Utilizes GPU if available for faster processing.
     """
-    device = 0 if torch.cuda.is_available() else -1
-    classifier = pipeline("zero-shot-classification", model="facebook/bart-large-mnli", device=device)
+    classifier = pipeline(
+        "zero-shot-classification",
+        model="facebook/bart-large-mnli",
+        device=device
+    )
     return classifier
 
 @st.cache_resource(show_spinner=False)
-def load_qa_pipeline() -> Pipeline:
+def load_qa_pipeline(device: int) -> Pipeline:
     """
     Load and cache the Question Answering pipeline.
-    Utilizes GPU if available for faster processing.
     """
-    device = 0 if torch.cuda.is_available() else -1
-    qa_pipeline = pipeline("question-answering", model="deepset/roberta-base-squad2", device=device)
+    qa_pipeline = pipeline(
+        "question-answering",
+        model="deepset/roberta-base-squad2",
+        device=device
+    )
     return qa_pipeline
 
 # ---------------------------- Sentiment Analysis Function with Batch Processing ----------------------------
 
-def analyze_sentiment_batch(sentences: List[str], tokenizer: AutoTokenizer, model: AutoModelForSequenceClassification, batch_size: int = 32) -> Tuple[List[str], List[float]]:
+def analyze_sentiment_batch(sentences: List[str], tokenizer: AutoTokenizer, model: AutoModelForSequenceClassification, device: str, batch_size: int = 32) -> Tuple[List[str], List[float]]:
     """
     Analyze sentiments for a batch of sentences.
     
@@ -67,6 +76,7 @@ def analyze_sentiment_batch(sentences: List[str], tokenizer: AutoTokenizer, mode
         sentences (List[str]): List of sentences to analyze.
         tokenizer: Tokenizer for the sentiment model.
         model: Sentiment analysis model.
+        device (str): Device identifier ('cpu' or 'cuda:0').
         batch_size (int): Number of samples per batch.
         
     Returns:
@@ -79,7 +89,7 @@ def analyze_sentiment_batch(sentences: List[str], tokenizer: AutoTokenizer, mode
     # Process in batches
     for i in range(0, len(sentences), batch_size):
         batch = sentences[i:i+batch_size]
-        encoded_input = tokenizer(batch, return_tensors='pt', padding=True, truncation=True).to(model.device)
+        encoded_input = tokenizer(batch, return_tensors='pt', padding=True, truncation=True).to(device)
         with torch.no_grad():
             outputs = model(**encoded_input)
         logits = outputs.logits.cpu().numpy()
@@ -237,13 +247,13 @@ def main():
             # Load models with spinner and concurrency
             with st.spinner('🔄 Loading models...'):
                 embedding_model, sentiment_tokenizer, sentiment_model, classifier, qa_pipeline = None, None, None, None, None
-                with ThreadPoolExecutor(max_workers=4) as executor:
+                with ThreadPoolExecutor(max_workers=5) as executor:
                     future_embedding = executor.submit(load_embedding_model)
                     future_sentiment = executor.submit(load_sentiment_model)
-                    future_classification = executor.submit(load_classification_pipeline)
-                    future_qa = executor.submit(load_qa_pipeline)
+                    future_classification = executor.submit(load_classification_pipeline, device=0 if torch.cuda.is_available() else -1)
+                    future_qa = executor.submit(load_qa_pipeline, device=0 if torch.cuda.is_available() else -1)
                     embedding_model = future_embedding.result()
-                    sentiment_tokenizer, sentiment_model = future_sentiment.result()
+                    sentiment_tokenizer, sentiment_model, sentiment_device = future_sentiment.result()
                     classifier = future_classification.result()
                     qa_pipeline = future_qa.result()
             
@@ -271,6 +281,7 @@ def main():
                         complaints.tolist(),
                         sentiment_tokenizer,
                         sentiment_model,
+                        sentiment_device,
                         batch_size
                     )
                     future_classification = executor.submit(
@@ -336,3 +347,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
